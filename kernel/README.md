@@ -1,23 +1,31 @@
 # kernel/
 
-Contains the kernel config patch that adds WiFi support to the
+Contains the script and reference config that add WiFi support to the
 [talos-rpi5/talos-builder](https://github.com/talos-rpi5/talos-builder) kernel.
 
 ## Files
 
-- `config.patch` — unified diff adding `CONFIG_CFG80211`, `CONFIG_BRCMFMAC`, and related options
+- `apply-config.sh` — shell script that sets each WiFi config option via `sed`.
+  Handles all three forms: `CONFIG_FOO=old`, `# CONFIG_FOO is not set`, and absent entries.
+  **This is what the CI and `make kernel` use.**
+- `config.patch` — human-readable reference showing what config values get applied.
+  Not a unified diff; do not use with `patch(1)` or `git apply`.
 
 ## How it's used
 
 `make kernel` and the CI `build-kernel` job:
-1. Clone talos-rpi5/talos-builder
-2. Apply `config.patch` with `patch -p1`
-3. Build the kernel using the talos-rpi5 build system
-4. Push the resulting installer image to `ghcr.io/koorikla/rasberry-wifi-kernel:TALOS_VERSION`
+1. Clone `talos-rpi5/talos-builder`
+2. Run `make checkouts patches` — clones `siderolabs/pkgs`, `siderolabs/talos`,
+   and `talos-rpi5/sbc-raspberrypi5`, then applies the RPi5 patches via `git am`
+3. Run `apply-config.sh checkouts/pkgs/kernel/build/config-arm64` — adds WiFi options
+4. Run `make kernel REGISTRY=ghcr.io REGISTRY_USERNAME=koorikla PUSH=true` — builds and pushes
+
+The CI uses `ubuntu-24.04-arm` (native ARM64). An x86 runner with QEMU would take 6+ hours.
 
 ## Updating after talos-rpi5 releases
 
-See `docs/KERNEL-BUILD.md` for the rebase workflow.
+See `docs/KERNEL-BUILD.md` for the rebase workflow. The `apply-config.sh` script is robust
+against config file changes — it finds and replaces each option regardless of line number.
 
 ## Config options explained
 

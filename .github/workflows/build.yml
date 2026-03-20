@@ -7,52 +7,38 @@ on:
     types: [published]
 
 env:
+  # Extensions and imager use v1.12.6.
+  # The kernel build uses whatever talos-rpi5/talos-builder targets (currently v1.11.5).
+  # See docs/KERNEL-BUILD.md for the version alignment notes.
   TALOS_VERSION: v1.12.6
   REGISTRY: ghcr.io/koorikla
-  KERNEL_IMAGE: ghcr.io/koorikla/rasberry-wifi-kernel
   FIRMWARE_IMAGE: ghcr.io/koorikla/sys-kernel-firmware-wifi
   WPA_IMAGE: ghcr.io/koorikla/wpa-supplicant
   RELEASE_IMAGE: ghcr.io/koorikla/rasberry-wifi
 
 jobs:
-  # ─── Pre-flight ──────────────────────────────────────────────────────────────
-  free-disk-space:
-    name: Free disk space
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - name: Show available disk space
-        run: df -h /
-
   # ─── Stage 1: Kernel ─────────────────────────────────────────────────────────
+  # Runs on ubuntu-24.04-arm (native ARM64) — required by the talos-rpi5 build
+  # toolchain. The free-tier x86 runner + QEMU would take 6+ hours.
   build-kernel:
     name: Build custom WiFi kernel
-    runs-on: ubuntu-latest
-    needs: free-disk-space
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
     outputs:
-      kernel-tag: ${{ steps.meta.outputs.version }}
+      kernel-image: ${{ steps.capture.outputs.kernel-image }}
+      talos-version: ${{ steps.capture.outputs.talos-version }}
 
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/share/dotnet /usr/local/share/powershell
+          df -h /
+
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -64,42 +50,52 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker meta (kernel image)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.KERNEL_IMAGE }}
-          tags: |
-            type=raw,value=${{ env.TALOS_VERSION }}
-            type=sha,prefix=${{ env.TALOS_VERSION }}-
+      - name: Configure git identity (required by git am in make patches)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Clone talos-rpi5/talos-builder
         run: |
           git clone --depth 1 https://github.com/talos-rpi5/talos-builder \
             /tmp/talos-rpi5-builder
 
-      - name: Apply kernel/config.patch
+      - name: Clone dependencies and apply RPi5 patches
         run: |
           cd /tmp/talos-rpi5-builder
-          git apply $GITHUB_WORKSPACE/kernel/config.patch
+          make checkouts
+          make patches
 
-      - name: Build and push custom kernel installer image
-        # NOTE: The exact make target depends on talos-rpi5/talos-builder's Makefile.
-        # Check their repo for the correct target to build+push the installer image.
-        # Common targets: 'kernel', 'installer', 'all'
+      - name: Apply WiFi kernel config
+        run: |
+          bash kernel/apply-config.sh \
+            /tmp/talos-rpi5-builder/checkouts/pkgs/kernel/build/config-arm64
+
+      - name: Build and push kernel
         run: |
           cd /tmp/talos-rpi5-builder
-          make installer \
-            REGISTRY=${{ env.REGISTRY }} \
-            TAG=${{ env.TALOS_VERSION }} \
-            PLATFORM=linux/arm64 \
-            PUSH=true
+          make kernel \
+            REGISTRY=ghcr.io \
+            REGISTRY_USERNAME=koorikla \
+            PUSH=true \
+            PLATFORM=linux/arm64
 
-  # ─── Stage 2: Extensions (parallel) ─────────────────────────────────────────
+      - name: Capture kernel image reference for downstream jobs
+        id: capture
+        run: |
+          PKGS_TAG=$(cd /tmp/talos-rpi5-builder/checkouts/pkgs && \
+            git describe --tag --always --dirty --match 'v[0-9]*')
+          TALOS_VER=$(grep '^TALOS_VERSION' /tmp/talos-rpi5-builder/Makefile \
+            | cut -d'=' -f2 | tr -d ' ')
+          echo "kernel-image=ghcr.io/koorikla/kernel:${PKGS_TAG}" >> "$GITHUB_OUTPUT"
+          echo "talos-version=${TALOS_VER}" >> "$GITHUB_OUTPUT"
+          echo "Kernel image: ghcr.io/koorikla/kernel:${PKGS_TAG}"
+          echo "Talos version from talos-rpi5: ${TALOS_VER}"
+
+  # ─── Stage 2: Extensions (parallel, x86 runners with QEMU) ──────────────────
   build-firmware-extension:
     name: Build sys-kernel-firmware-wifi
     runs-on: ubuntu-latest
-    needs: free-disk-space
     permissions:
       contents: read
       packages: write
@@ -136,7 +132,6 @@ jobs:
   build-wpa-extension:
     name: Build wpa-supplicant extension
     runs-on: ubuntu-latest
-    needs: free-disk-space
     permissions:
       contents: read
       packages: write
@@ -183,9 +178,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free remaining disk space
+      - name: Free disk space
         run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/share/dotnet /usr/local/share/powershell
           df -h /
 
       - name: Log in to GHCR
@@ -196,17 +192,23 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Assemble metal-arm64 image
+        env:
+          KERNEL_IMAGE: ${{ needs.build-kernel.outputs.kernel-image }}
+          # Use the Talos version that the kernel was actually built against
+          KERNEL_TALOS_VERSION: ${{ needs.build-kernel.outputs.talos-version }}
         run: |
           mkdir -p _out
+          echo "Kernel image: ${KERNEL_IMAGE}"
+          echo "Talos version for imager: ${KERNEL_TALOS_VERSION}"
           docker run --rm \
             --privileged \
             -v /dev:/dev \
             -v ${{ github.workspace }}/_out:/out \
-            ghcr.io/siderolabs/imager:${{ env.TALOS_VERSION }} \
+            ghcr.io/siderolabs/imager:${KERNEL_TALOS_VERSION} \
             metal \
             --arch arm64 \
             --board rpi_generic \
-            --base-installer-image ${{ env.KERNEL_IMAGE }}:${{ env.TALOS_VERSION }} \
+            --base-installer-image "${KERNEL_IMAGE}" \
             --system-extension-image ${{ env.FIRMWARE_IMAGE }}:${{ env.TALOS_VERSION }} \
             --system-extension-image ${{ env.WPA_IMAGE }}:${{ env.TALOS_VERSION }} \
             --extra-kernel-arg "console=ttyAMA0,115200"
@@ -221,19 +223,7 @@ jobs:
           path: _out/metal-arm64.raw.xz
           retention-days: 7
 
-      # ── Release: push image to GHCR ────────────────────────────────────────
-      - name: Set up crane (for GHCR OCI image push on release)
-        if: github.event_name == 'release'
-        uses: imjasonh/setup-crane@v0.3
-
-      - name: Push image to GHCR on release
-        if: github.event_name == 'release'
-        run: |
-          crane push \
-            _out/metal-arm64.raw.xz \
-            ${{ env.RELEASE_IMAGE }}:${{ github.ref_name }} \
-            --platform linux/arm64
-
+      # ── Release: attach to GitHub Release ──────────────────────────────────
       - name: Upload to GitHub Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2

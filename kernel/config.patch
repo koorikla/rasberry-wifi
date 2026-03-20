@@ -1,23 +1,24 @@
---- a/kernel/build/config-arm64
-+++ b/kernel/build/config-arm64
-@@ -1,3 +1,20 @@
-+# WiFi support for Raspberry Pi 5 (CYW43455 / brcmfmac via SDIO)
-+# Applied on top of talos-rpi5/talos-builder kernel config
-+#
-+# NOTE: CONFIG_CFG80211 must be =y (built-in), not =m.
-+# Talos requires the networking stack to be compiled in.
-+# brcmutil and brcmfmac can be =m (modules) but must be signed at build time.
-+
-+CONFIG_CFG80211=y
-+CONFIG_CFG80211_WEXT=y
-+CONFIG_MAC80211=m
-+CONFIG_MAC80211_MESH=n
-+CONFIG_RFKILL=y
-+CONFIG_RFKILL_INPUT=y
-+CONFIG_BRCMUTIL=m
-+CONFIG_BRCMFMAC=m
-+CONFIG_BRCMFMAC_SDIO=y
-+CONFIG_BRCMFMAC_PROTO_BCDC=y
-+CONFIG_BRCMFMAC_PROTO_MSGBUF=y
-+CONFIG_BRCMFMAC_PCIE=n
-+CONFIG_BRCMFMAC_USB=n
+# WiFi kernel config additions for Raspberry Pi 5 (CYW43455 / brcmfmac via SDIO)
+#
+# This is NOT a unified diff. It documents the config values that
+# kernel/apply-config.sh sets on the siderolabs/pkgs kernel config.
+#
+# The script handles existing entries (=old_value or # not set) correctly.
+# Do not apply this file with patch(1) or git apply — use apply-config.sh.
+#
+# Target file (after talos-rpi5/talos-builder `make checkouts patches`):
+#   checkouts/pkgs/kernel/build/config-arm64
+
+CONFIG_CFG80211=y              # 802.11 subsystem — must be built-in (Talos req)
+CONFIG_CFG80211_WEXT=y
+CONFIG_MAC80211=m
+CONFIG_MAC80211_MESH=n
+CONFIG_RFKILL=y                # RF kill switch — needed to unblock WiFi interface
+CONFIG_RFKILL_INPUT=y
+CONFIG_BRCMUTIL=m              # Broadcom utility module (brcmfmac dependency)
+CONFIG_BRCMFMAC=m              # Broadcom FullMAC driver (CYW43455)
+CONFIG_BRCMFMAC_SDIO=y         # SDIO bus — RPi5 connects WiFi via SDIO, not PCIe/USB
+CONFIG_BRCMFMAC_PROTO_BCDC=y
+CONFIG_BRCMFMAC_PROTO_MSGBUF=y
+CONFIG_BRCMFMAC_PCIE=n
+CONFIG_BRCMFMAC_USB=n

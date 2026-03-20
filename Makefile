@@ -28,29 +28,28 @@ build: kernel extensions image  ## Full pipeline: kernel → extensions → imag
 
 ## ─── Stage 1: Kernel ──────────────────────────────────────────────────────────
 
-kernel:  ## Build patched WiFi kernel (clones talos-rpi5/talos-builder, applies config.patch)
+kernel:  ## Build patched WiFi kernel (clones talos-rpi5/talos-builder, runs apply-config.sh)
 	@echo "==> Stage 1: Building custom WiFi kernel"
 	@echo "    Base: $(TALOS_RPI5_BUILDER_REPO)"
-	@echo "    Patch: kernel/config.patch"
-	@echo "    Output: $(KERNEL_IMAGE)"
+	@echo "    Config script: kernel/apply-config.sh"
 	@if [ ! -d "$(TALOS_RPI5_BUILDER_DIR)" ]; then \
 		git clone --depth 1 $(TALOS_RPI5_BUILDER_REPO) $(TALOS_RPI5_BUILDER_DIR); \
 	else \
 		git -C $(TALOS_RPI5_BUILDER_DIR) pull --ff-only; \
 	fi
-	@echo "--> Applying kernel/config.patch"
-	@# NOTE: The exact path to the kernel config within talos-rpi5/talos-builder
-	@# may vary between releases. Verify with:
-	@#   find $(TALOS_RPI5_BUILDER_DIR) -name "config-arm64" -o -name "*.config"
-	@git -C $(TALOS_RPI5_BUILDER_DIR) apply $(CURDIR)/kernel/config.patch || \
-		(echo "ERROR: patch failed — see docs/KERNEL-BUILD.md for rebase instructions" && exit 1)
+	@echo "--> Setting up talos-rpi5 build (make checkouts patches)"
+	@$(MAKE) -C $(TALOS_RPI5_BUILDER_DIR) checkouts patches
+	@echo "--> Applying WiFi kernel config"
+	@bash $(CURDIR)/kernel/apply-config.sh \
+		$(TALOS_RPI5_BUILDER_DIR)/checkouts/pkgs/kernel/build/config-arm64
 	@echo "--> Building kernel (this takes 30-60 minutes first run)"
 	@$(MAKE) -C $(TALOS_RPI5_BUILDER_DIR) \
-		REGISTRY=$(REGISTRY) \
-		TAG=$(TALOS_VERSION) \
+		REGISTRY=ghcr.io \
+		REGISTRY_USERNAME=koorikla \
+		PUSH=true \
 		PLATFORM=$(PLATFORM) \
 		kernel
-	@echo "==> Kernel build complete: $(KERNEL_IMAGE)"
+	@echo "==> Kernel build complete"
 
 ## ─── Stage 2: Extensions ──────────────────────────────────────────────────────
 
