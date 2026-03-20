@@ -1,0 +1,243 @@
+name: Build Talos RPi5 WiFi Image
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+env:
+  TALOS_VERSION: v1.12.6
+  REGISTRY: ghcr.io/koorikla
+  KERNEL_IMAGE: ghcr.io/koorikla/rasberry-wifi-kernel
+  FIRMWARE_IMAGE: ghcr.io/koorikla/sys-kernel-firmware-wifi
+  WPA_IMAGE: ghcr.io/koorikla/wpa-supplicant
+  RELEASE_IMAGE: ghcr.io/koorikla/rasberry-wifi
+
+jobs:
+  # ─── Pre-flight ──────────────────────────────────────────────────────────────
+  free-disk-space:
+    name: Free disk space
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Show available disk space
+        run: df -h /
+
+  # ─── Stage 1: Kernel ─────────────────────────────────────────────────────────
+  build-kernel:
+    name: Build custom WiFi kernel
+    runs-on: ubuntu-latest
+    needs: free-disk-space
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      kernel-tag: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta (kernel image)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.KERNEL_IMAGE }}
+          tags: |
+            type=raw,value=${{ env.TALOS_VERSION }}
+            type=sha,prefix=${{ env.TALOS_VERSION }}-
+
+      - name: Clone talos-rpi5/talos-builder
+        run: |
+          git clone --depth 1 https://github.com/talos-rpi5/talos-builder \
+            /tmp/talos-rpi5-builder
+
+      - name: Apply kernel/config.patch
+        run: |
+          cd /tmp/talos-rpi5-builder
+          git apply $GITHUB_WORKSPACE/kernel/config.patch
+
+      - name: Build and push custom kernel installer image
+        # NOTE: The exact make target depends on talos-rpi5/talos-builder's Makefile.
+        # Check their repo for the correct target to build+push the installer image.
+        # Common targets: 'kernel', 'installer', 'all'
+        run: |
+          cd /tmp/talos-rpi5-builder
+          make installer \
+            REGISTRY=${{ env.REGISTRY }} \
+            TAG=${{ env.TALOS_VERSION }} \
+            PLATFORM=linux/arm64 \
+            PUSH=true
+
+  # ─── Stage 2: Extensions (parallel) ─────────────────────────────────────────
+  build-firmware-extension:
+    name: Build sys-kernel-firmware-wifi
+    runs-on: ubuntu-latest
+    needs: free-disk-space
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push firmware extension
+        uses: docker/build-push-action@v5
+        with:
+          context: extensions/sys-kernel-firmware-wifi
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.FIRMWARE_IMAGE }}:${{ env.TALOS_VERSION }}
+          cache-from: type=gha,scope=firmware-ext
+          cache-to: type=gha,scope=firmware-ext,mode=max
+
+  build-wpa-extension:
+    name: Build wpa-supplicant extension
+    runs-on: ubuntu-latest
+    needs: free-disk-space
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push wpa-supplicant extension
+        uses: docker/build-push-action@v5
+        with:
+          context: extensions/wpa-supplicant
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.WPA_IMAGE }}:${{ env.TALOS_VERSION }}
+          cache-from: type=gha,scope=wpa-ext
+          cache-to: type=gha,scope=wpa-ext,mode=max
+
+  # ─── Stage 3: Image assembly ─────────────────────────────────────────────────
+  build-image:
+    name: Assemble metal image
+    runs-on: ubuntu-latest
+    needs: [build-kernel, build-firmware-extension, build-wpa-extension]
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free remaining disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble metal-arm64 image
+        run: |
+          mkdir -p _out
+          docker run --rm \
+            --privileged \
+            -v /dev:/dev \
+            -v ${{ github.workspace }}/_out:/out \
+            ghcr.io/siderolabs/imager:${{ env.TALOS_VERSION }} \
+            metal \
+            --arch arm64 \
+            --board rpi_generic \
+            --base-installer-image ${{ env.KERNEL_IMAGE }}:${{ env.TALOS_VERSION }} \
+            --system-extension-image ${{ env.FIRMWARE_IMAGE }}:${{ env.TALOS_VERSION }} \
+            --system-extension-image ${{ env.WPA_IMAGE }}:${{ env.TALOS_VERSION }} \
+            --extra-kernel-arg "console=ttyAMA0,115200"
+
+      - name: List output
+        run: ls -lh _out/
+
+      - name: Upload image as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: talos-rpi5-wifi-metal-arm64
+          path: _out/metal-arm64.raw.xz
+          retention-days: 7
+
+      # ── Release: push image to GHCR ────────────────────────────────────────
+      - name: Set up crane (for GHCR OCI image push on release)
+        if: github.event_name == 'release'
+        uses: imjasonh/setup-crane@v0.3
+
+      - name: Push image to GHCR on release
+        if: github.event_name == 'release'
+        run: |
+          crane push \
+            _out/metal-arm64.raw.xz \
+            ${{ env.RELEASE_IMAGE }}:${{ github.ref_name }} \
+            --platform linux/arm64
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: _out/metal-arm64.raw.xz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
