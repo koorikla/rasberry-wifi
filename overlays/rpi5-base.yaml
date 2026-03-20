@@ -1,0 +1,10 @@
+# Base RPi5 machine config overrides
+# Committed — no secrets here
+machine:
+  install:
+    disk: /dev/mmcblk0   # SD card; change to /dev/sda for USB
+    bootloader: true
+  kernel:
+    modules: []          # kernel modules loaded at boot (add as needed)
+  network:
+    hostname: rpi5-wifi  # override in node-specific patch
