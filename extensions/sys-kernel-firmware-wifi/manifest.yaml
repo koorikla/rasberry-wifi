@@ -1,0 +1,12 @@
+version: v1alpha1
+metadata:
+  name: sys-kernel-firmware-wifi
+  version: 1.0.0
+  author: koorikla
+  description: |
+    WiFi firmware blobs for Raspberry Pi 5 (Broadcom CYW43455 / brcmfmac).
+    Ships brcmfmac43455-sdio.* from linux-firmware into /lib/firmware/brcm/.
+    Requires a Talos kernel built with CONFIG_BRCMFMAC enabled.
+  compatibility:
+    talos:
+      version: ">= v1.12.0"
