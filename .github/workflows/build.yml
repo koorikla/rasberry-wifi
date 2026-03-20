@@ -74,11 +74,16 @@ jobs:
       - name: Build and push kernel
         run: |
           cd /tmp/talos-rpi5-builder
+          # CI_ARGS injects --label into the docker buildx build inside siderolabs/pkgs.
+          # The org.opencontainers.image.source label causes GHCR to automatically link
+          # the koorikla/kernel package to this repository, which is required for
+          # GITHUB_TOKEN to have push permission.
           make kernel \
             REGISTRY=ghcr.io \
             REGISTRY_USERNAME=koorikla \
             PUSH=true \
-            PLATFORM=linux/arm64
+            PLATFORM=linux/arm64 \
+            CI_ARGS="--label org.opencontainers.image.source=https://github.com/koorikla/rasberry-wifi"
 
       - name: Capture kernel image reference for downstream jobs
         id: capture
