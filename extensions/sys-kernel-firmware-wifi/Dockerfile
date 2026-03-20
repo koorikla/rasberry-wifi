@@ -20,8 +20,9 @@ COPY --from=firmware /usr/lib/firmware/brcm/brcmfmac43455-sdio.txt \
      /rootfs/lib/firmware/brcm/brcmfmac43455-sdio.txt
 
 # RPi5-specific firmware variant (board-specific .bin)
-# This file may not exist in all linux-firmware versions; the COPY will fail
-# silently if --chmod is not used. If missing, brcmfmac falls back to the generic .bin.
+# This file may not exist in all linux-firmware versions. If missing, the build
+# will fail — pin linux-firmware-brcm to a version that includes it, or remove this line
+# and rely on the generic brcmfmac43455-sdio.bin above as the fallback.
 COPY --from=firmware /usr/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin \
      /rootfs/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin
 
