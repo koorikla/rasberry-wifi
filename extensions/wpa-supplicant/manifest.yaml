@@ -1,0 +1,12 @@
+version: v1alpha1
+metadata:
+  name: wpa-supplicant
+  version: 1.0.0
+  author: koorikla
+  description: |
+    wpa_supplicant binary and extension service for WiFi authentication on Talos Linux.
+    Runs wpa_supplicant in the host network namespace as a Talos extension service.
+    Configure via Talos machine config network.interfaces[].wireless.accessPoints.
+  compatibility:
+    talos:
+      version: ">= v1.12.0"
