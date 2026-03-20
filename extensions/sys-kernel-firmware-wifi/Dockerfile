@@ -1,8 +1,22 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: extract Broadcom firmware from Alpine linux-firmware package
-FROM alpine:3.21 AS firmware
-RUN apk add --no-cache linux-firmware-brcm
+# Stage 1: extract and decompress Broadcom firmware.
+# Run on linux/amd64 (native, no QEMU) — firmware blobs are architecture-independent.
+# Files are at /lib/firmware/brcm/ (not /usr/lib/firmware/) and are .zst compressed.
+# hadolint ignore=DL3029
+FROM --platform=linux/amd64 alpine:3.21 AS firmware
+RUN apk add --no-cache linux-firmware-brcm zstd
+
+# Decompress firmware files for CYW43455 (RPi5 onboard WiFi via SDIO).
+# Files are symlinks → /lib/firmware/cypress/cyfmac43455-sdio*.zst
+# Use zstdcat (follows symlinks) rather than zstd -d (which ignores symlinks).
+RUN cd /lib/firmware/brcm && \
+    zstdcat brcmfmac43455-sdio.bin.zst                             > brcmfmac43455-sdio.bin && \
+    zstdcat brcmfmac43455-sdio.clm_blob.zst                        > brcmfmac43455-sdio.clm_blob && \
+    zstdcat brcmfmac43455-sdio.txt.zst                             > brcmfmac43455-sdio.txt && \
+    zstdcat brcmfmac43455-sdio.raspberrypi,5-model-b.bin.zst      > "brcmfmac43455-sdio.raspberrypi,5-model-b.bin" && \
+    zstdcat brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob.zst > "brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob" && \
+    zstdcat brcmfmac43455-sdio.raspberrypi,5-model-b.txt.zst      > "brcmfmac43455-sdio.raspberrypi,5-model-b.txt"
 
 # Stage 2: assemble extension image
 # Talos system extension layout:
@@ -11,20 +25,21 @@ RUN apk add --no-cache linux-firmware-brcm
 FROM scratch AS extension
 COPY manifest.yaml /manifest.yaml
 
-# Firmware blobs for CYW43455 (RPi5 onboard WiFi)
-COPY --from=firmware /usr/lib/firmware/brcm/brcmfmac43455-sdio.bin \
+# Generic fallback firmware (used if no board-specific variant is found)
+COPY --from=firmware /lib/firmware/brcm/brcmfmac43455-sdio.bin \
      /rootfs/lib/firmware/brcm/brcmfmac43455-sdio.bin
-COPY --from=firmware /usr/lib/firmware/brcm/brcmfmac43455-sdio.clm_blob \
+COPY --from=firmware /lib/firmware/brcm/brcmfmac43455-sdio.clm_blob \
      /rootfs/lib/firmware/brcm/brcmfmac43455-sdio.clm_blob
-COPY --from=firmware /usr/lib/firmware/brcm/brcmfmac43455-sdio.txt \
+COPY --from=firmware /lib/firmware/brcm/brcmfmac43455-sdio.txt \
      /rootfs/lib/firmware/brcm/brcmfmac43455-sdio.txt
 
-# RPi5-specific firmware variant (board-specific .bin)
-# This file may not exist in all linux-firmware versions. If missing, the build
-# will fail — pin linux-firmware-brcm to a version that includes it, or remove this line
-# and rely on the generic brcmfmac43455-sdio.bin above as the fallback.
-COPY --from=firmware /usr/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin \
+# RPi5 board-specific firmware (preferred by brcmfmac over the generic files)
+COPY --from=firmware /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin \
      /rootfs/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin
+COPY --from=firmware /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob \
+     /rootfs/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob
+COPY --from=firmware /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.txt \
+     /rootfs/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.txt
 
 LABEL org.opencontainers.image.title="sys-kernel-firmware-wifi"
 LABEL org.opencontainers.image.description="WiFi firmware blobs for RPi5 Talos extension"
