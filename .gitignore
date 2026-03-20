@@ -1,0 +1,13 @@
+# Build artefacts
+_out/
+
+# Secrets / machine configs with credentials
+overlays/wifi-*.yaml
+overlays/secrets*.yaml
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+*.swp
